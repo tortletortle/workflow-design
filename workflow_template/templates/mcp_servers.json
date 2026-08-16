@@ -1,0 +1,148 @@
+{
+  "$comment": "MCP 服务库。真实开源服务全部 enabled=false,需要时改 true 并按 needs 配好环境变量/参数即可。Windows 注意:npx/uvx 需包一层 cmd /c(如 command=cmd, args=[/c, npx, -y, ...])。来源:官方仓库 github.com/modelcontextprotocol/servers 及社区主流项目。",
+  "servers": [
+    {
+      "name": "demo",
+      "transport": "mock",
+      "enabled": true,
+      "tools": [
+        {
+          "name": "echo",
+          "description": "原样返回输入(演示用)",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" }
+            },
+            "required": ["text"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "filesystem",
+      "transport": "stdio",
+      "repo": "github.com/modelcontextprotocol/servers",
+      "license": "MIT/Apache-2.0",
+      "provides": "受控目录内的安全文件读写/搜索(读代码、读写文档)",
+      "needs": "args 末尾追加允许访问的目录绝对路径",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/替换/为允许的目录"],
+      "env": {},
+      "enabled": false
+    },
+    {
+      "name": "fetch",
+      "transport": "stdio",
+      "repo": "github.com/modelcontextprotocol/servers",
+      "license": "MIT/Apache-2.0",
+      "provides": "抓取网页内容并转为 markdown(联网查资料)",
+      "needs": "—",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-fetch"],
+      "env": {},
+      "enabled": false
+    },
+    {
+      "name": "memory",
+      "transport": "stdio",
+      "repo": "github.com/modelcontextprotocol/servers",
+      "license": "MIT/Apache-2.0",
+      "provides": "知识图谱式持久长期记忆(实体/关系/观察),跨会话记住用户与事实",
+      "needs": "npx;MEMORY_FILE_PATH 指定持久化 JSONL 路径;策略需授 permission=memory",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {
+        "MEMORY_FILE_PATH": "D:/core/工作流设计/workflow_template/memory_store.jsonl"
+      },
+      "permission": "memory",
+      "enabled": true
+    },
+    {
+      "name": "git",
+      "transport": "stdio",
+      "repo": "github.com/modelcontextprotocol/servers",
+      "license": "MIT/Apache-2.0",
+      "provides": "Git 仓库操作(status/log/diff/branch/commit)",
+      "needs": "可选 --repository 指定默认仓库;需本机有 git",
+      "command": "uvx",
+      "args": ["mcp-server-git"],
+      "env": {},
+      "enabled": false
+    },
+    {
+      "name": "sequential-thinking",
+      "transport": "stdio",
+      "repo": "github.com/modelcontextprotocol/servers",
+      "license": "MIT/Apache-2.0",
+      "provides": "结构化分步推理(思维链工具化,复杂问题拆解)",
+      "needs": "—",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequentialthinking"],
+      "env": {},
+      "enabled": false
+    },
+    {
+      "name": "time",
+      "transport": "stdio",
+      "repo": "github.com/modelcontextprotocol/servers",
+      "license": "MIT/Apache-2.0",
+      "provides": "当前时间与时区转换(跨时区排期)",
+      "needs": "—",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-time"],
+      "env": {},
+      "enabled": false
+    },
+    {
+      "name": "everything",
+      "transport": "stdio",
+      "repo": "github.com/modelcontextprotocol/servers",
+      "license": "MIT/Apache-2.0",
+      "provides": "官方测试服务器,覆盖全部 MCP 特性(调试/验收用)",
+      "needs": "—",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-everything"],
+      "env": {},
+      "enabled": false
+    },
+    {
+      "name": "playwright",
+      "transport": "stdio",
+      "repo": "github.com/microsoft/playwright-mcp",
+      "license": "Apache-2.0",
+      "provides": "真实浏览器自动化(导航/点击/填表/截图,网页操作类工作流)",
+      "needs": "首次运行会自动下载浏览器内核",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "env": {},
+      "enabled": false
+    },
+    {
+      "name": "context7",
+      "transport": "stdio",
+      "repo": "github.com/upstash/context7",
+      "license": "MIT",
+      "provides": "拉取各类库/框架的最新版文档(解决模型知识过期问题)",
+      "needs": "—",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "env": {},
+      "enabled": false
+    },
+    {
+      "name": "brave-search",
+      "transport": "stdio",
+      "repo": "github.com/brave/brave-search-mcp-server",
+      "license": "MIT",
+      "provides": "Brave 网页搜索(联网检索类工作流)",
+      "needs": "BRAVE_API_KEY(免费额度需注册 brave.com/search/api)",
+      "command": "npx",
+      "args": ["-y", "@brave/brave-search-mcp-server"],
+      "env": {
+        "BRAVE_API_KEY": "从环境变量读取后填入"
+      },
+      "enabled": false
+    }
+  ]
+}

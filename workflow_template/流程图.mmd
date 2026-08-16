@@ -1,0 +1,21 @@
+flowchart TD
+    A[workflow_template 信封] --> B[Splicer 拼接器]
+    B -->|"system(插值+RAG)→ history → user"| C[ModelRequest.messages]
+    C --> D{Hook: pre_model_call}
+    D --> E[ModelClient]
+    E -->|"OpenAI 兼容 /v1/chat/completions"| F[模型回复 JSON]
+    F --> G{Hook: post_model_call}
+    G --> H[Translator 翻译器]
+    H -->|type=text / empty| I["收尾: final_answer"]
+    H -->|type=tool_calls| J{Hook: pre_dispatch}
+    J --> K[Dispatcher 分发器]
+    K -->|local| L[本地工具 @tool]
+    K -->|mcp:<server>| M[MCP 服务]
+    K -->|not found| N[ToolResult ok=False]
+    L --> O[ToolResult ok=True]
+    M --> O
+    N --> P{Hook: post_dispatch}
+    O --> P
+    P --> Q["回填 tool 消息 → transcript → 下一轮"]
+    Q --> B
+    I --> R[RunResult status=final]

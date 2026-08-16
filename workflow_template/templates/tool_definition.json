@@ -1,0 +1,23 @@
+{
+  "$comment": "工具定义模板:OpenAI function 格式(兼容 model_gateway 与绝大多数厂商)。parameters 即 JSON Schema;MCP 服务的 inputSchema 可直接映射到该结构。本地工具用 @tool 装饰器注册时,该定义由函数签名+docstring 自动生成。",
+  "type": "function",
+  "function": {
+    "name": "query_order",
+    "description": "按订单号查询物流状态与预计送达时间",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "string",
+          "description": "订单号,如 A-1234"
+        },
+        "include_items": {
+          "type": "boolean",
+          "description": "是否返回商品明细",
+          "default": false
+        }
+      },
+      "required": ["order_id"]
+    }
+  }
+}

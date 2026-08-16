@@ -1,0 +1,27 @@
+flowchart TD
+    A[POST /v1/chat/completions] --> B{校验通过?}
+    B -- 否 --> E400[400 bad_request]
+    B -- 是 --> C{带 idempotency_key<br/>且命中缓存?}
+    C -- 是 --> R200[200 返回缓存响应]
+    C -- 否 --> D{并发超限?}
+    D -- 是 --> E429[429 rate_limited]
+    D -- 否 --> F{有 model?}
+    F -- 有 --> G{模型存在?}
+    G -- 否 --> E404[404 model_not_found]
+    G -- 是 --> H{provider 启用?}
+    H -- 否 --> E503[503 provider_disabled]
+    H -- 是 --> Q
+    F -- 无 model --> I{有 capability?}
+    I -- 无 --> E400b[400 no_model_or_capability]
+    I -- 有 --> J{有匹配的启用模型?}
+    J -- 无 --> E400c[400 no_model_for_capability]
+    J -- 有 --> K[按能力表评分选最优]
+    K --> Q{配额检查<br/>max_tokens / 上下文}
+    Q -- 超限 --> E413[413 quota_exceeded]
+    Q -- 通过 --> L[调用 provider<br/>request_timeout 兜底]
+    L -- 上游超时 --> E504[504 upstream_timeout]
+    L -- 总超时 --> E408[408 client_timeout]
+    L -- 5xx/网络失败 --> E502[502 upstream_error]
+    L -- 内部异常 --> E500[500 internal_error]
+    L -- 成功 --> M[缓存幂等响应<br/>附加 metadata]
+    M --> R200b[200 ChatCompletion + metadata]

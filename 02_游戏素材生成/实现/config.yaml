@@ -1,0 +1,25 @@
+# 流程参数(.env 只放凭据/模型名,env 优先)
+
+image:
+  size: "1024x1024"     # 生图请求尺寸
+  retries: 2            # 启发式质检不过时的重生次数
+
+review:
+  max_rounds: 2         # 视觉审核不过 → 带反馈重生成的最大轮数
+  min_score: 8          # 打分 >= 此值算过
+
+cutout:
+  engine: "auto"        # auto | rembg | white_key(auto=优先 rembg,不可用降级白底键控)
+  white_tolerance: 18   # 白底键控:与纯白的灰度容差(抗轻微渐变)
+  feather: 2            # alpha 边缘羽化半径(px)
+  padding_ratio: 0.06   # 裁边后主体四周留白占比
+
+decompose:
+  temperature: 0.3      # 提示词分解温度(解析失败自动降温重试)
+
+style:
+  anchor: ""            # 全局风格锚:所有任务公共前缀,跨任务风格一致(如 "16-bit pixel art, limited palette")
+  lib_dir: "lib"        # 主体卡/风格库目录(相对项目根),JSON 存储人可读可手改
+
+output:
+  dir: "out"            # 任务产物根目录(相对项目根)

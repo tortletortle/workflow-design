@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>森林守护者 · Forest Guardian</title>
+<style>
+  html,body{margin:0;height:100%;background:#1a1423;display:flex;align-items:center;justify-content:center;}
+  canvas{border:4px solid #3d2b4f;border-radius:8px;image-rendering:pixelated;max-width:96vw;max-height:96vh;}
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="600"></canvas>
+<script>
+"use strict";
+/* 森林守护者 —— 素材全部由 AI 游戏素材生成器产出(MCP 流水线) */
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+ctx.imageSmoothingEnabled = false;
+
+const IMAGES = {};
+function load(name){ return new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>rej(name);i.src="assets/"+name;}); }
+// 动画帧(generate_animation 产出): idle 呼吸(站立) / side 侧视走路(移动);缺失回退静态图
+let idleFrames = [], sideFrames = [];
+function loadAnimFrames(){
+  idleFrames = [0,1].map(i=>IMAGES["player_idle"+i]).filter(Boolean);
+  sideFrames = [0,1,2,3,4,5].map(i=>IMAGES["player_side"+i]).filter(Boolean);
+}
+
+const S = { TITLE:0, PLAY:1, OVER:2 };
+let state = S.TITLE;
+let player, enemies, projectiles, drops, booms, keys = {};
+let score = 0, spawnTimer = 0, elapsed = 0, shake = 0;
+
+function reset(){
+  player = {x:400,y:300,r:26,hp:5,maxHp:5,speed:210,cool:0,invuln:0,face:1,
+            moving:false,idleT:0,walkT:0};
+  enemies=[];projectiles=[];drops=[];booms=[];
+  score=0;spawnTimer=1;elapsed=0;
+}
+
+function spawnEnemy(){
+  const side = Math.floor(Math.random()*4);
+  const m = 40;
+  let x = side===0?-m : side===1?canvas.width+m : m+Math.random()*(canvas.width-2*m);
+  let y = side===2?-m : side===3?canvas.height+m : m+Math.random()*(canvas.height-2*m);
+  if(Math.random()<0.45){ // 蝙蝠:快,正弦飘动
+    enemies.push({type:"bat",x,y,r:20,hp:1,speed:120+Math.random()*40,phase:Math.random()*6.28});
+  }else{ // 史莱姆:慢,直追
+    enemies.push({type:"slime",x,y,r:24,hp:2,speed:52+Math.random()*18,phase:Math.random()*6.28});
+  }
+}
+
+function fire(){
+  let best=null,bd=1e9;
+  for(const e of enemies){const d=(e.x-player.x)**2+(e.y-player.y)**2;if(d<bd){bd=d;best=e;}}
+  if(!best)return;
+  const d=Math.sqrt(bd)||1,vx=(best.x-player.x)/d,vy=(best.y-player.y)/d;
+  projectiles.push({x:player.x+vx*30,y:player.y+vy*30,vx:vx*400,vy:vy*400,r:12,life:2.2});
+  player.face = vx>=0?1:-1;
+}
+
+function dropFrom(e){
+  drops.push({type:"coin",x:e.x,y:e.y,r:14,t:0});
+  if(Math.random()<0.18)drops.push({type:"potion",x:e.x+18,y:e.y,r:16,t:0});
+  else if(Math.random()<0.08)drops.push({type:"ring",x:e.x-18,y:e.y,r:15,t:0});
+}
+
+function hitPlayer(){
+  if(player.invuln>0)return;
+  player.hp--;player.invuln=1.3;shake=10;
+  if(player.hp<=0){state=S.OVER;}
+}
+
+function update(dt){
+  elapsed+=dt;
+  // 移动
+  let dx=(keys.d||keys.arrowright?1:0)-(keys.a||keys.arrowleft?1:0);
+  let dy=(keys.s||keys.arrowdown?1:0)-(keys.w||keys.arrowup?1:0);
+  const moving = !!(dx||dy);
+  if(dx&&dy){dx*=0.707;dy*=0.707;}
+  player.x=Math.max(30,Math.min(canvas.width-30,player.x+dx*player.speed*dt));
+  player.y=Math.max(40,Math.min(canvas.height-30,player.y+dy*player.speed*dt));
+  player.invuln=Math.max(0,player.invuln-dt);
+  // 动画计时:移动=侧视走路(6fps),静止=idle 呼吸(慢速)
+  player.moving=moving;
+  if(moving){player.walkT+=dt; player.idleT=0;}
+  else {player.idleT+=dt; player.walkT=0;}
+
+  // 自动攻击
+  player.cool-=dt;
+  if(player.cool<=0){fire();player.cool=0.65;}
+
+  // 刷怪
+  spawnTimer-=dt;
+  if(spawnTimer<=0 && enemies.length<14){
+    spawnEnemy();
+    spawnTimer=Math.max(0.85,2.1-elapsed*0.012);
+  }
+
+  // 敌人
+  for(const e of enemies){
+    const d=Math.hypot(player.x-e.x,player.y-e.y)||1;
+    let ux=(player.x-e.x)/d,uy=(player.y-e.y)/d;
+    e.phase+=dt*5;
+    if(e.type==="bat"){const s=Math.sin(e.phase)*0.6;ux+=-uy*s;uy+=ux*s;}
+    e.x+=ux*e.speed*dt;e.y+=uy*e.speed*dt;
+    if(d<e.r+player.r-6)hitPlayer();
+  }
+
+  // 火球
+  for(const p of projectiles){
+    p.x+=p.vx*dt;p.y+=p.vy*dt;p.life-=dt;
+    for(const e of enemies){
+      if((p.x-e.x)**2+(p.y-e.y)**2<(p.r+e.r)**2){
+        p.life=0;e.hp--;
+        if(e.hp<=0){e.dead=true;booms.push({x:e.x,y:e.y,t:0});dropFrom(e);score+=10;}
+        break;
+      }
+    }
+  }
+  projectiles=projectiles.filter(p=>p.life>0);
+  enemies=enemies.filter(e=>!e.dead);
+
+  // 爆炸动画
+  for(const b of booms)b.t+=dt;
+  booms=booms.filter(b=>b.t<0.45);
+
+  // 掉落物(磁吸)
+  for(const d of drops){
+    d.t+=dt;
+    const dist=Math.hypot(player.x-d.x,player.y-d.y);
+    if(dist<110){d.x+=(player.x-d.x)/dist*240*dt;d.y+=(player.y-d.y)/dist*240*dt;}
+    if(dist<player.r+d.r-4){
+      d.dead=true;
+      if(d.type==="coin")score+=10;
+      if(d.type==="potion"){player.hp=Math.min(player.maxHp,player.hp+1);score+=5;}
+      if(d.type==="ring")score+=50;
+    }
+  }
+  drops=drops.filter(d=>!d.dead&&d.t<25);
+  shake=Math.max(0,shake-dt*30);
+}
+
+function drawSprite(img,x,y,size,flip=0,alpha=1){
+  ctx.save();
+  ctx.globalAlpha*=alpha;
+  ctx.translate(x,y);
+  if(flip)ctx.scale(-1,1);
+  ctx.drawImage(img,-size/2,-size/2,size,size);
+  ctx.restore();
+}
+// 帧序列交叉淡化播放:当前帧全亮 + 下一帧按进度混入,掩盖帧间跳变
+function drawFrameSeq(frames,t,fps,size,x,y,flip){
+  const p=t*fps, i=Math.floor(p)%frames.length, f=p-Math.floor(p);
+  drawSprite(frames[i],x,y,size,flip,1);
+  drawSprite(frames[(i+1)%frames.length],x,y,size,flip,f);
+}
+
+function draw(){
+  ctx.save();
+  if(shake>0)ctx.translate((Math.random()-0.5)*shake,(Math.random()-0.5)*shake);
+  ctx.drawImage(IMAGES.background,0,0,canvas.width,canvas.height);
+
+  if(state===S.TITLE){
+    ctx.fillStyle="rgba(10,6,20,0.72)";ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.textAlign="center";
+    ctx.fillStyle="#ffd97a";ctx.font="bold 52px sans-serif";
+    ctx.fillText("森 林 守 护 者",400,240);
+    ctx.fillStyle="#cfe8ff";ctx.font="20px sans-serif";
+    ctx.fillText("WASD / 方向键移动 · 自动向最近的怪物发射火球",400,300);
+    ctx.fillText("击败史莱姆与蝙蝠,收集金币 / 药水 / 魔法戒指",400,332);
+    drawSprite(IMAGES.player,400,420,96);
+    ctx.fillStyle="#8fe388";ctx.font="bold 24px sans-serif";
+    ctx.fillText("按任意键开始",400,520);
+    ctx.restore();return;
+  }
+
+  // 掉落物
+  for(const d of drops){
+    const bob=Math.sin(d.t*5)*3;
+    const img=IMAGES[d.type],sz=d.type==="potion"?34:d.type==="ring"?30:26;
+    drawSprite(img,d.x,d.y+bob,sz);
+  }
+  // 敌人
+  for(const e of enemies){
+    const bob=Math.sin(e.phase)* (e.type==="bat"?5:2);
+    drawSprite(IMAGES[e.type],e.x,e.y+bob,e.type==="bat"?46:52,e.x>player.x?1:0);
+  }
+  // 火球
+  for(const p of projectiles)drawSprite(IMAGES.fireball,p.x,p.y,30,p.vx<0?1:0);
+  // 玩家(受击闪烁;移动=侧视走路 6fps 交叉淡化,静止=idle 呼吸正弦混合,缺帧回退静态)
+  if(!(player.invuln>0 && Math.floor(player.invuln*12)%2===0)){
+    const flip=player.face<0?1:0;
+    if(player.moving&&sideFrames.length>=2)
+      drawFrameSeq(sideFrames,player.walkT,6,64,player.x,player.y,flip);
+    else if(!player.moving&&idleFrames.length>=2){
+      const blend=(1+Math.sin(player.idleT*2.4))/2;  // ~0.4Hz 呼吸
+      drawSprite(idleFrames[0],player.x,player.y,64,flip,1);
+      drawSprite(idleFrames[1],player.x,player.y,64,flip,blend);
+    } else
+      drawSprite(IMAGES.player,player.x,player.y,64,flip);
+  }
+  // 爆炸
+  for(const b of booms){
+    const k=b.t/0.45;
+    ctx.globalAlpha=1-k;
+    drawSprite(IMAGES.explosion,b.x,b.y,40+k*70);
+    ctx.globalAlpha=1;
+  }
+
+  // HUD: 血条 + 分数
+  for(let i=0;i<player.maxHp;i++){
+    ctx.globalAlpha=i<player.hp?1:0.25;
+    drawSprite(IMAGES.heart,30+i*36,32,30);
+  }
+  ctx.globalAlpha=1;
+  drawSprite(IMAGES.coin,canvas.width-118,32,28);
+  ctx.textAlign="left";ctx.fillStyle="#ffd97a";ctx.font="bold 24px sans-serif";
+  ctx.fillText(String(score),canvas.width-96,40);
+  ctx.fillStyle="rgba(255,255,255,0.55)";ctx.font="13px sans-serif";
+  ctx.fillText("存活 "+elapsed.toFixed(0)+"s",canvas.width-96,62);
+
+  if(state===S.OVER){
+    ctx.fillStyle="rgba(10,6,20,0.72)";ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.textAlign="center";
+    ctx.fillStyle="#ff8a8a";ctx.font="bold 48px sans-serif";
+    ctx.fillText("勇者倒下了…",400,260);
+    ctx.fillStyle="#ffd97a";ctx.font="26px sans-serif";
+    ctx.fillText("得分 "+score+" · 存活 "+elapsed.toFixed(1)+" 秒",400,320);
+    ctx.fillStyle="#8fe388";ctx.font="bold 22px sans-serif";
+    ctx.fillText("按 Enter 重新开始",400,380);
+  }
+  ctx.restore();
+}
+
+let last=0;
+function loop(t){
+  const dt=Math.min(0.05,(t-last)/1000);last=t;
+  if(state===S.PLAY)update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+addEventListener("keydown",e=>{
+  const k=e.key.toLowerCase();
+  if(state===S.TITLE){state=S.PLAY;reset();}
+  else if(state===S.OVER&&k==="enter"){state=S.PLAY;reset();}
+  keys[k]=true;
+  if(["arrowup","arrowdown","arrowleft","arrowright"," "].includes(k))e.preventDefault();
+});
+addEventListener("keyup",e=>{keys[e.key.toLowerCase()]=false;});
+
+Promise.all(["player","slime","bat","fireball","explosion","coin","potion","ring","heart","background"]
+  .map(n=>load(n+".png").then(img=>IMAGES[n]=img)))
+  // 动画帧可选加载:idle×2 + side×6,缺帧回退静态 player.png,游戏照常可玩
+  .then(()=>Promise.allSettled(
+    [...[0,1].map(i=>"player_idle"+i),...[0,1,2,3,4,5].map(i=>"player_side"+i)]
+    .map(n=>load(n+".png").then(img=>IMAGES[n]=img))))
+  .then(()=>{loadAnimFrames();reset();requestAnimationFrame(loop);})
+  .catch(name=>document.body.innerHTML="<p style='color:#fff;font-family:sans-serif'>素材加载失败: "+name+"</p>");
+</script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+flowchart TD
+    A[A 调用方请求: generate_asset 描述/类别/风格/尺寸/反馈/卡引用] --> S{一致性解析}
+    S -->|style=库名 或 全局风格锚| S1[风格锚注入]
+    S -->|subject_ref| S2[主体卡: 锁定外观]
+    S1 --> B
+    S2 --> B
+    A --> B[请求分解: LLM → 结构化英文提示词<br/>元素类+白底后缀 / 满幅类+满幅后缀]
+    B -->|LLM 解析失败| B1[降级: 直译描述 + 模板合成]
+    B1 --> C
+    B --> C[生图: images/generations 主通道<br/>失败 → chat 降级通道]
+    C --> D[本地启发式质检<br/>空白/尺寸/体积]
+    D -->|不过 ×N 重试| C
+    D -->|重试耗尽| X1[返回结构化错误]
+    D -->|通过| E{视觉审核可用?<br/>可挂独立服务商}
+    E -->|vision_model 未配/探测失败| F[审核跳过 skipped<br/>调用方 AI 可看 draft 兜底]
+    E -->|可用| G[视觉模型打分(按类别标准)<br/>单主体白底 / 满幅完整画面]
+    G -->|不过 且未到轮数上限| H[带反馈重新分解+重生成] --> G
+    G -->|通过/轮数耗尽/审核报错| I
+    F --> I{类别?}
+    I -->|元素类 character/item/icon/effect/ui| J[抠图: rembg 语义抠图<br/>未装/失败 → 白底键控兜底<br/>近白主体守卫: 保留原图]
+    I -->|满幅类 background/tile| J2[跳过抠图, 整图满幅]
+    J --> K[缩放输出: 裁透明边 → 补边距<br/>→ 等比多尺寸 RGBA PNG]
+    J2 --> K
+    K --> L[任务落盘 out/任务号_名称/<br/>draft/cutout/master/finals/task.json<br/>save_subject_as → 冻结主体卡到 lib/]
+    L --> M[返回 JSON: 全部产物绝对路径<br/>+ 审核结论 + notes]
+
+    Y[独立工具: cutout_image<br/>对任意已有图片抠图+多尺寸] --> J
+    Z[独立工具: list_assets / list_library<br/>历史任务与素材库汇总] --> L
+
+    style X1 fill:#fdd
+    style F fill:#ffd

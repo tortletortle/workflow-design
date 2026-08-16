@@ -1,0 +1,20 @@
+{
+  "mcp": {
+    "servers": {
+      "game-asset-generator": {
+        "type": "stdio",
+        "command": "C:\\Users\\tortl\\AppData\\Local\\hermes\\bin\\uv.exe",
+        "args": [
+          "--directory",
+          "D:\\core\\工作流设计\\02_游戏素材生成\\实现",
+          "run",
+          "python",
+          "-m",
+          "app.server"
+        ],
+        "env": {},
+        "timeoutMs": 60000
+      }
+    }
+  }
+}

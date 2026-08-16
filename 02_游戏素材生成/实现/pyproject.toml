@@ -1,0 +1,31 @@
+[project]
+name = "game-asset-generator"
+version = "0.1.0"
+description = "AI 游戏素材生成器 MCP server:分解→白底生图→审核→抠图→多尺寸输出"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.2",
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "pyyaml>=6.0",
+    "pillow>=10.3",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# rembg 为可选增强(onnxruntime 较重,首次运行需下载 ~170MB 模型);
+# 未安装时自动降级 PIL 白底键控抠图,流程不中断
+rembg = ["rembg[cpu]>=2.0.57"]
+dev = ["pytest>=8.2", "pytest-asyncio>=0.23"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]

@@ -1,0 +1,64 @@
+{
+  "$comment": "AI 工作流模板 · 完整请求信封示例。所有层级均可加 x- 前缀自定义字段,模板原样透传不丢弃。context.vars 中的变量可在 system_prompt 里用 {{var}} 引用,拼接时自动插值。",
+  "workflow": {
+    "name": "客服问答",
+    "version": "1.0",
+    "run_id": "",
+    "step": 0,
+    "max_steps": 8
+  },
+  "request": {
+    "$comment": "拼接产物放这里;model 与 capability 二选一(与 model_gateway 路由规则一致)",
+    "model": "mock-smart",
+    "capability": null,
+    "messages": [],
+    "tools": [],
+    "tool_choice": "auto",
+    "temperature": 0.2,
+    "max_tokens": 1024
+  },
+  "context": {
+    "user_id": "u-10086",
+    "session": {
+      "channel": "web"
+    },
+    "vars": {
+      "user_name": "张三",
+      "lang": "zh-CN",
+      "today": "2026-08-15"
+    },
+    "retrieved": [
+      {
+        "source": "kb/order-policy.md",
+        "text": "订单签收后 7 天内可无理由退货……"
+      }
+    ]
+  },
+  "hooks": [
+    "on_start",
+    "pre_model_call",
+    "post_model_call",
+    "pre_dispatch",
+    "post_dispatch",
+    "on_finish",
+    "on_error"
+  ],
+  "x-custom-anything": {
+    "trace": "业务自定义字段,原样透传"
+  },
+  "inputs": {
+    "$comment": "本次运行的原始输入,由拼接器消费:system 模板 + 历史 + 当前用户输入",
+    "system_prompt": "你是 {{user_name}} 的专属客服助手,使用 {{lang}} 回答。今天的日期是 {{today}}。",
+    "history": [
+      {
+        "role": "user",
+        "content": "上次买的订单什么时候到?"
+      },
+      {
+        "role": "assistant",
+        "content": "请提供订单号,我帮您查询。"
+      }
+    ],
+    "user_input": "订单号 A-1234,顺便问下退货政策"
+  }
+}

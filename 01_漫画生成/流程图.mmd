@@ -1,0 +1,13 @@
+flowchart TD
+    A[输入: 故事文本 txt] --> B[阶段1 拆分<br/>grok-chat-fast]
+    B -->|结构化 JSON + 容错解析<br/>失败降温重试| C[分镜列表<br/>index/scene/characters/dialogue/shot]
+    C --> D[阶段1.5 角色卡<br/>一次调用提炼外貌锁定]
+    D --> E[阶段2 设计·并发<br/>风格锚 + 角色卡 + 镜头语言]
+    E --> F[每格英文生图提示词]
+    F --> G[阶段3 生图·并发<br/>grok-imagine images/generations]
+    G -->|url/b64 下载<br/>尺寸归一化 resize| H[panel_01..NN.png]
+    H --> I[阶段4 拼接 Pillow]
+    I -->|竖排逐格追加<br/>+ 编号台词字幕条<br/>失败格占位框| J[输出: comic.png<br/>+ panels/ + state.json]
+    J -.断点续跑: 重跑跳过已生图格.-> G
+    G -->|images 接口失败| K[降级: chat 端点<br/>从回复提取图片 URL]
+    K --> H

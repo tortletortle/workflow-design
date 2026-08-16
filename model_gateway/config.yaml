@@ -1,0 +1,137 @@
+# model_gateway 网关配置
+# mode: mock = 全部走本地 Mock(默认,网络无关、错误可控);real = 按 .env 里的 key 调真实 provider
+mode: mock
+
+providers:
+  mock:
+    base_url: mock://local
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    proxy_env: OPENAI_PROXY          # 可选:该 provider 专属代理,形如 http://127.0.0.1:7890
+  deepseek:
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+  qwen:
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key_env: DASHSCOPE_API_KEY
+  moonshot:
+    base_url: https://api.moonshot.cn/v1
+    api_key_env: MOONSHOT_API_KEY
+
+# 能力表:每个模型声明 capabilities + 各维度评分,供智能路由排序
+# latency_tier 越小越快;quality_rank 越大越好;cost_per_1k 越小越便宜;max_context 越大越长
+models:
+  # ---- 真实模型(mode=real 且配好 api_key 后启用)----
+  - name: gpt-4o
+    provider: openai
+    capabilities: [high_quality, vision]
+    max_context: 128000
+    max_output: 16384
+    cost_per_1k: 0.005
+    latency_tier: 3
+    quality_rank: 9
+  - name: gpt-4o-mini
+    provider: openai
+    capabilities: [low_cost, low_latency]
+    max_context: 128000
+    max_output: 16384
+    cost_per_1k: 0.0002
+    latency_tier: 1
+    quality_rank: 7
+  - name: deepseek-chat
+    provider: deepseek
+    capabilities: [low_cost, high_quality, long_context]
+    max_context: 64000
+    max_output: 8192
+    cost_per_1k: 0.001
+    latency_tier: 2
+    quality_rank: 8
+  - name: qwen-max
+    provider: qwen
+    capabilities: [high_quality, long_context]
+    max_context: 32000
+    max_output: 8192
+    cost_per_1k: 0.002
+    latency_tier: 3
+    quality_rank: 8
+  - name: qwen-turbo
+    provider: qwen
+    capabilities: [low_latency, low_cost]
+    max_context: 128000
+    max_output: 8192
+    cost_per_1k: 0.0005
+    latency_tier: 1
+    quality_rank: 6
+  - name: moonshot-v1-32k
+    provider: moonshot
+    capabilities: [long_context]
+    max_context: 32000
+    max_output: 8192
+    cost_per_1k: 0.001
+    latency_tier: 2
+    quality_rank: 6
+
+  # ---- Mock 模型(任何 mode 下均可用;behavior 决定行为)----
+  - name: mock-fast
+    provider: mock
+    capabilities: [low_latency, low_cost]
+    max_context: 8192
+    max_output: 4096
+    cost_per_1k: 0.0
+    latency_tier: 1
+    quality_rank: 5
+    behavior: ok
+  - name: mock-smart
+    provider: mock
+    capabilities: [high_quality, long_context]
+    max_context: 65536
+    max_output: 8192
+    cost_per_1k: 0.0
+    latency_tier: 3
+    quality_rank: 9
+    behavior: ok
+  - name: mock-vision
+    provider: mock
+    capabilities: [vision]
+    max_context: 16384
+    max_output: 4096
+    cost_per_1k: 0.0
+    latency_tier: 2
+    quality_rank: 7
+    behavior: ok
+  # 以下为行为模型:用于稳定复现各类错误路径
+  - name: mock-slow                # 正常但慢,配合极小 request_timeout 复现 408
+    provider: mock
+    capabilities: []
+    max_context: 8192
+    behavior: ok
+    delay: 0.3
+  - name: mock-small-context      # 上下文极小,用于网关侧 413
+    provider: mock
+    capabilities: [long_context]
+    max_context: 64
+    max_output: 32
+    behavior: ok
+  - name: mock-fail-timeout       # 上游超时 → 504
+    provider: mock
+    behavior: timeout
+  - name: mock-fail-overflow      # 上下文溢出 → 413
+    provider: mock
+    behavior: overflow
+  - name: mock-fail-502           # 上游 5xx → 502
+    provider: mock
+    behavior: http_502
+  - name: mock-fail-network       # 网络连不上 → 502
+    provider: mock
+    behavior: network
+  - name: mock-counted            # 正常响应但记录调用次数,用于幂等验证
+    provider: mock
+    behavior: counted
+
+limits:
+  max_concurrency: 8       # 全局并发上限,超出 → 429
+  request_timeout: 60      # 客户端总超时(秒),超出 → 408
+  upstream_timeout: 15     # 单次上游调用超时(秒),超出 → 504
+
+idempotency_ttl: 300       # idempotency_key 缓存 TTL(秒)
