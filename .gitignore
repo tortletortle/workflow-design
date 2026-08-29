@@ -18,3 +18,7 @@ workflow_template/memory_store.jsonl
 
 # 临时文件
 02_游戏素材生成/实现/_t.gif
+
+# 环境变量备份文件(补充规则,2026-08-29 自动整理时加入)
+.env.backup.*
+*.env.backup*

@@ -11,6 +11,7 @@ import re
 from pydantic import BaseModel, Field
 
 from app.client import ChatClient
+from app.errors import ModelOutputError
 
 
 class Panel(BaseModel):
@@ -54,10 +55,21 @@ def _extract_json_array(text: str) -> str:
 
 
 def parse_panels(raw: str, expected: int | None = None) -> list[Panel]:
-    panels = [Panel.model_validate(p) for p in json.loads(_extract_json_array(raw))]
+    try:
+        arr = _extract_json_array(raw)
+        panels = [Panel.model_validate(p) for p in json.loads(arr)]
+    except (ValueError, json.JSONDecodeError) as e:
+        raise ModelOutputError("splitter", f"JSON 解析失败: {e}", raw_output=raw)
+    except Exception as e:
+        raise ModelOutputError("splitter", f"分镜格式验证失败: {e}", raw_output=raw)
+    
     panels.sort(key=lambda p: p.index)
     if expected and len(panels) != expected:
-        raise ValueError(f"expected {expected} panels, got {len(panels)}")
+        raise ModelOutputError(
+            "splitter", 
+            f"期望 {expected} 格，实际返回 {len(panels)} 格",
+            raw_output=raw
+        )
     return panels
 
 
@@ -85,18 +97,34 @@ async def split_story(
         try:
             raw = await chat.chat(messages, temperature=temperature)
             return parse_panels(raw, expected=count)
-        except (ValueError, json.JSONDecodeError) as e:
+        except ModelOutputError as e:
             last_error = e
-    raise RuntimeError(f"story splitting failed after retry: {last_error}")
+    # 重试后仍失败，抛出最后一次错误
+    raise last_error if last_error else ModelOutputError("splitter", "未知错误")
 
 
 POLISH_SYSTEM = (
     "You are a manga caption editor. For each panel below, write ONE short caption "
     "in {lang}: a punchy spoken line or narration that fits the panel mood. Rules: "
     "max {n} characters; every panel MUST get a caption (use narration if no dialogue); "
-    "keep original meaning; no quotes, no panel numbers. "
+    "keep original meaning; do NOT copy the scene text, write NEW wording; "
+    "no quotes, no panel numbers. "
     "Respond ONLY a JSON array: [{{\"index\": <int>, \"caption\": \"...\"}}]."
 )
+
+
+def sanitize_caption(raw: str, scenes: set[str], max_chars: int) -> str:
+    """清洗 polish 产物(live 2026-08-17:模型偶发把输入摘要原样回吐)。
+
+    - 去引号/空白;截断 " | dialogue: ..." 类摘要伪影
+    - 字幕恰好等于某格 scene → 判定为回吐,丢弃(拼接回退 dialogue/scene)
+    - 硬性截断到 max_chars
+    """
+    cap = raw.strip().strip("\"'“”‘’").strip()
+    cap = re.split(r"\s*\|\s*", cap, maxsplit=1)[0].strip()
+    if not cap or cap in scenes:
+        return ""
+    return cap[:max_chars]
 
 
 async def polish_captions(
@@ -110,6 +138,7 @@ async def polish_captions(
         f"#{p.index} scene: {p.scene} | dialogue: {p.dialogue or '(none)'}"
         for p in panels
     )
+    scenes = {p.scene for p in panels}
     try:
         raw = await chat.chat(
             [
@@ -119,7 +148,10 @@ async def polish_captions(
             temperature=0.4,
         )
         items = json.loads(_extract_json_array(raw))
-        by_index = {item["index"]: str(item.get("caption", ""))[:max_chars + 6] for item in items}
+        by_index = {
+            item["index"]: sanitize_caption(str(item.get("caption", "")), scenes, max_chars)
+            for item in items
+        }
         for p in panels:
             if by_index.get(p.index):
                 p.caption = by_index[p.index]

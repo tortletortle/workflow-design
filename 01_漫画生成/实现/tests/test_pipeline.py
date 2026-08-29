@@ -30,6 +30,10 @@ async def test_pipeline_end_to_end(config, tmp_path):
     pipeline.out_dir = tmp_path
     pipeline.panels_dir = tmp_path / "panels"
     pipeline.state_path = tmp_path / "state.json"
+    
+    # 设置 reporter (静默模式)
+    from app.progress import ProgressReporter
+    pipeline.reporter = ProgressReporter(silent=True)
     # 注入 mock transport:直接替换客户端构造(通过子类化 run 太重,这里复用 run 但替换类属性)
     import app.pipeline as pl
 
@@ -62,6 +66,9 @@ async def test_pipeline_resume_skips_existing_images(config, tmp_path):
     pipeline.out_dir = tmp_path
     pipeline.panels_dir = tmp_path / "panels"
     pipeline.state_path = tmp_path / "state.json"
+    
+    from app.progress import ProgressReporter
+    pipeline.reporter = ProgressReporter(silent=True)
 
     # 预置:第 1 格已完成(有提示词 + 有图)
     pipeline.panels_dir.mkdir(parents=True)
@@ -112,6 +119,9 @@ async def test_pipeline_partial_failure_still_assembles(config, tmp_path):
     pipeline.out_dir = tmp_path
     pipeline.panels_dir = tmp_path / "panels"
     pipeline.state_path = tmp_path / "state.json"
+    
+    from app.progress import ProgressReporter
+    pipeline.reporter = ProgressReporter(silent=True)
 
     seq = {"img": 0}
 

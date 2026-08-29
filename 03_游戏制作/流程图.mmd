@@ -1,0 +1,25 @@
+flowchart TD
+    A[用户输入: "我想做一个塔防游戏"] --> B[Stage 1: 认知]
+    B --> C[LLM 生成 GDD<br/>类型/核心机制/玩法循环/资源清单/UI布局]
+    C --> D[Stage 2: 模板检索]
+    D --> E[搜 2d-game-templates/local/ 目录<br/>+ 搜 yqxyx_games.json 索引]
+    E -->|匹配到模板| F[记录模板路径+核心逻辑文件]
+    E -->|未匹配| F2[使用通用 HTML5 骨架]
+    F --> G[Stage 3: 素材生成]
+    F2 --> G
+    G --> H[遍历资源清单<br/>调用 gen_asset.py 逐素材生成]
+    H --> I{生成成功?}
+    I -->|是| J[素材落盘 assets/ 目录]
+    I -->|否| K[生成占位色块+标记]
+    K --> J
+    J --> L[Stage 4: 制作]
+    L --> M[读取模板逻辑+素材路径<br/>LLM 生成 HTML5 游戏代码]
+    M --> N[写入 game/index.html + game.js]
+    N --> O[Stage 5: 视觉检测]
+    O --> P[Playwright 打开游戏页面<br/>截取关键帧: 主菜单/游戏开始/游戏中]
+    P --> Q[视觉模型逐张审核<br/>评分 1-10 + 问题列表]
+    Q -->|评分 ≥ 7| R[交付: 输出报告+游戏路径]
+    Q -->|评分 < 7| S[带反馈修复问题]
+    S --> T[LLM 修改代码<br/>重试 ≤ 2 轮]
+    T --> O
+    R --> U[√ 完成]

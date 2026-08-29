@@ -1,0 +1,19 @@
+[project]
+name = "game-production"
+version = "0.1.0"
+description = "03_游戏制作: AI 游戏制作工作流 (认知→模板→素材→制作→视觉检测)"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+qa = ["playwright>=1.40"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

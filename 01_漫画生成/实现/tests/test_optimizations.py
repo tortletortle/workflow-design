@@ -149,6 +149,10 @@ def _pipeline(config, tmp_path, chat_transport=None, img_transport=None):
     p.out_dir = tmp_path
     p.panels_dir = tmp_path / "panels"
     p.state_path = tmp_path / "state.json"
+    
+    from app.progress import ProgressReporter
+    p.reporter = ProgressReporter(silent=True)
+    
     import app.pipeline as pl
 
     orig_chat, orig_image = pl.ChatClient, pl.ImageClient

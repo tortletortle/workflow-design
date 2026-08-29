@@ -1,17 +1,11 @@
-"""动画帧生成:角色卡锁外观 + 逐帧姿势提示词 → 多帧素材 → 归一化对齐 → 拼条/GIF。
+"""动画帧生成 v2: 参考SpriteForge架构改进
 
-帧间一致性的四板斧(文生图没有"帧"概念,必须主动压漂移):
-1. 姿势专属提示词:每帧写死该帧的具体姿势描述,不交给 LLM 自由发挥
-2. 图生图条件生成(④):第 0 帧文生图定锚,后续帧编辑锚帧"同角色仅改姿势",
-   外观由参考图条件化(需配 ASSET_EDIT_*;未配/失败自动回退逐帧文生图)
-3. 逐帧视觉审核:审核该帧"姿势是否符合 + 单主体白底",不过带反馈重生成;
-   相邻帧连贯性审核抓"跳变帧"
-4. 后期归一化:每帧裁透明边 → 等比缩放到统一主体高度 → 底边中线对齐
-   (比例/站位漂移在绘制时被压平,播放时基本无抖动)
-
-复用现有模块:主体卡(consistency)、生图+质检(generator)、图生图编辑(EditClient)、
-视觉审核(reviewer)、抠图(cutout)。帧提示词不走 LLM 分解——卡里已有主体描述,
-直接拼模板更可控。
+核心改进:
+1. 更多帧数: walk 16帧(2步×8帧/步), idle 8帧, 互动6-8帧
+2. 渐进式姿势提示词: 每帧描述精确到可见几何,帧间变化量小且可控
+3. 重试升级: soft→guided→constrained 三级重试(最多10次)
+4. 锚帧锁定: 第0帧为身份锚点,后续帧Gate 1强制对比一致性
+5. 帧间连续性: Gate 2检查相邻帧平滑度
 """
 from __future__ import annotations
 
@@ -19,6 +13,7 @@ import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
 from app import cutout as cutout_mod
@@ -35,53 +30,128 @@ from dataclasses import dataclass as _dc
 @_dc
 class ActionDef:
     poses: list[str]
-    # 动作专属视角/构图提示;空 = 默认正面全身(CHARACTER_TAIL)
     view: str = ""
 
 
+# ====== 侧视走路: 16帧 = 2步 × 8帧/步 ======
+# 每帧描述精确到可见几何,帧间变化量控制在最小
+# 关键: 用"脚离地几厘米""膝盖弯曲角度"等具体描述,不用动画行话
+WALK_SIDE_16 = ActionDef(
+    view=("full body side profile view facing right, walking toward the right, "
+          "legs and arms clearly visible, complete figure from head to feet"),
+    poses=[
+        # === 第1步: 右脚起步 ===
+        "standing upright, right foot flat on ground ahead, left foot flat on ground behind, weight on right leg, arms relaxed at sides",
+        "right leg bearing weight, left heel lifting off ground, left knee starting to bend, right arm swinging forward slightly",
+        "left foot completely off ground, left knee bent 90 degrees, thigh parallel to ground, right arm forward, left arm back",
+        "left leg extending forward, left foot moving ahead, right leg straight, both arms passing through center",
+        "left foot landing flat on ground ahead, right heel lifting, weight transferring to left leg",
+        "right foot off ground, right knee bent 90 degrees, thigh parallel to ground, left arm forward, right arm back",
+        "right leg extending forward, right foot moving ahead, left leg straight, both arms passing through center",
+        "right foot landing flat on ground ahead, left heel lifting, weight transferring to right leg",
+        # === 第2步: 左脚起步(镜像) ===
+        "standing upright, left foot flat on ground ahead, right foot flat on ground behind, weight on left leg, arms relaxed at sides",
+        "left leg bearing weight, right heel lifting off ground, right knee starting to bend, left arm swinging forward slightly",
+        "right foot completely off ground, right knee bent 90 degrees, thigh parallel to ground, left arm forward, right arm back",
+        "right leg extending forward, right foot moving ahead, left leg straight, both arms passing through center",
+        "right foot landing flat on ground ahead, left heel lifting, weight transferring to right leg",
+        "left foot off ground, left knee bent 90 degrees, thigh parallel to ground, right arm forward, left arm back",
+        "left leg extending forward, left foot moving ahead, right leg straight, both arms passing through center",
+        "left foot landing flat on ground ahead, right heel lifting, weight transferring to left leg",
+    ],
+)
+
+# ====== 待机: 8帧呼吸循环 ======
+IDLE_8 = ActionDef(poses=[
+    "standing relaxed, weight evenly distributed on both feet, arms at sides, neutral calm expression",
+    "standing relaxed, chest slightly expanding on inhale, shoulders rising 1cm, subtle breath",
+    "standing relaxed, peak of inhale, chest fully expanded, shoulders at highest point",
+    "standing relaxed, beginning exhale, chest settling, shoulders dropping slightly",
+    "standing relaxed, exhaling, chest returning to normal, weight shifting slightly to left foot",
+    "standing relaxed, weight on left foot, right hip slightly raised, subtle lean",
+    "standing relaxed, weight returning to center, right foot flat again",
+    "standing relaxed, completing breath cycle, back to neutral balanced pose",
+])
+
+# ====== 互动动作: 6帧 ======
+HAPPY_6 = ActionDef(poses=[
+    "standing neutral, slight smile appearing, eyes brightening, hands at sides",
+    "standing, gentle smile, one hand rising to chest level, fingers spread",
+    "standing, happy expression, hand near chin in cute pose, slight head tilt",
+    "standing, bright smile, both hands clasped together in front of chest",
+    "standing, cheerful expression, hands squeezing together, shoulders raised slightly",
+    "standing, content smile, hands returning to sides, relaxed happy pose",
+])
+
+WAVE_6 = ActionDef(poses=[
+    "standing, right arm starting to lift from side, palm opening, friendly expression",
+    "standing, right arm raised to shoulder height, elbow bent, palm facing forward",
+    "standing, right arm raised above head, palm open waving right, bright smile",
+    "standing, right arm above head, palm waving left, fingers spread",
+    "standing, right arm coming down to shoulder height, wave finishing",
+    "standing, right arm returning to side, warm expression, wave complete",
+])
+
+HEART_6 = ActionDef(poses=[
+    "standing, both hands moving together in front of chest, fingers touching",
+    "standing, both hands forming diamond shape near chest, slight blush appearing",
+    "standing, heart shape completed with both hands, pushing forward slightly",
+    "standing, heart shape held out toward viewer, warm smile, sparkling eyes",
+    "standing, heart shape fading, hands separating, still smiling",
+    "standing, hands returning to sides, content warm expression",
+])
+
+JUMP_8 = ActionDef(poses=[
+    "standing, crouching down, knees bent deeply, arms pulled back, preparing to jump",
+    "mid-jump, leaving ground, legs straightening, arms swinging upward, dynamic pose",
+    "ascending, body rising, legs tucking slightly, arms raised high, joyful expression",
+    "peak of jump, highest point, body fully extended upward, arms spread wide",
+    "descending, body coming down, legs extending, arms coming down for balance",
+    "landing, knees bent absorbing impact, arms out to sides, feet touching ground",
+    "standing upright, recovering from landing, knees straightening, arms settling",
+    "standing normal, happy expression after successful jump, back to neutral pose",
+])
+
+SPEAK_6 = ActionDef(poses=[
+    "standing, mouth opening to speak, one hand rising to gesture, calm expression",
+    "standing, talking, mouth open, hand raised with index finger pointing up",
+    "standing, talking, hand moving to side gesture, explaining something",
+    "standing, talking, hand returning near chest, mouth still open mid-sentence",
+    "standing, finishing sentence, hand settling, mouth closing slightly",
+    "standing, finished speaking, hand at side, calm polite expression",
+])
+
+
+# 覆盖内置动作
 ANIM_ACTIONS: dict[str, ActionDef] = {
-    "walk": ActionDef(poses=[
-        "standing neutral pose, legs together, arms resting at sides",
-        "mid-stride, left leg lifted stepping forward, arms swinging naturally",
-        "contact pose, legs passing each other mid-cycle, arms centered",
-        "mid-stride, right leg lifted stepping forward, arms swinging opposite",
-    ]),
-    "idle": ActionDef(poses=[
-        "standing relaxed, subtle breathing pose, weight even on both legs",
-        "standing relaxed, slight weight shift, chest slightly expanded",
-    ]),
-    "attack": ActionDef(poses=[
-        "winding up, weapon raised high above head, body coiled",
-        "mid-swing, weapon sweeping forward, body leaning into the strike",
-        "follow-through, weapon lowered after impact, body settling",
-    ]),
-    # 侧视走路:姿势梯度更细(右脚在前↔左脚在前 ×2 交替),可读性远好于正面走。
-    # 描述用可见几何而非动画行话(contact/down/passing),编辑模型按行话会蹲成"下蹲"
-    "walk_side": ActionDef(
-        view=("full body side profile view facing right, walking toward the right, "
-              "legs and arms clearly separated in stride, complete figure"),
-        poses=[
-            "stepping forward, right foot flat on the ground ahead, left heel lifting behind, arms swinging naturally",
-            "mid-stride, both legs under the body, back heel lifted, shoulders level",
-            "stepping forward, left foot flat on the ground ahead, right heel lifting behind, arms swinging opposite",
-            "stepping forward, left foot flat on the ground ahead, right heel lifting behind, arms swinging naturally",
-            "mid-stride, both legs under the body, back heel lifted, shoulders level",
-            "stepping forward, right foot flat on the ground ahead, left heel lifting behind, arms swinging opposite",
-        ],
-    ),
+    "walk_side": WALK_SIDE_16,
+    "idle": IDLE_8,
+    "happy": HAPPY_6,
+    "wave": WAVE_6,
+    "heart": HEART_6,
+    "jump": JUMP_8,
+    "speak": SPEAK_6,
 }
 
 CHARACTER_TAIL = f"{CATEGORY_HINTS['character']}, consistent proportions and framing across the series"
 
-# 图生图编辑指令:锚帧(第 0 帧)已定死角色外观,后续帧只允许改姿势。
-# 不变量(同角色/同风格/同构图同比例)显式写死;背景与阴影也要显式禁止——
-# 编辑模型有自发加地面阴影/底色渐变的倾向,靠默认行为守不住纯白底
+# 图生图编辑指令: 更严格的不变量约束
 EDIT_INSTRUCTION = (
-    "Keep the exact same character: identical design, colors, outfit, proportions, art "
+    "Keep the EXACT same character: identical design, colors, outfit, proportions, art "
     "style, framing, scale and centered full-body composition. Only change the pose to: "
     "{pose}. Keep a completely flat uniform pure white background with no floor shadow, "
-    "no gradient, no color tint, and do not add any new elements or text."
+    "no gradient, no color tint, and do not add any new elements or text. "
+    "The character must remain in the same position in the frame."
 )
+
+# 重试升级配置(参考SpriteForge)
+RETRY_TIERS = [
+    {"name": "soft", "attempts": (1, 3), "temp": 1.0, "guidance": ""},
+    {"name": "guided", "attempts": (4, 6), "temp": 0.7,
+     "guidance": "Focus on matching the exact pose description. Pay attention to arm and leg positions."},
+    {"name": "constrained", "attempts": (7, 10), "temp": 0.3,
+     "guidance": "CRITICAL: You must match the pose EXACTLY. Do not deviate from the description."},
+]
 
 
 @dataclass
@@ -94,7 +164,7 @@ class AnimResult:
     image_calls: int = 0
     notes: list[str] = field(default_factory=list)
     review_status: str = "skipped"
-    edit_used: bool = False  # 后续帧是否走了图生图编辑(锚帧条件生成)
+    edit_used: bool = False
 
 
 def frame_prompt(subject: str, style: str, pose: str, view: str = "") -> str:
@@ -105,7 +175,7 @@ def frame_prompt(subject: str, style: str, pose: str, view: str = "") -> str:
 
 async def generate_frames(
     subject_ref: str,
-    action: str = "walk",
+    action: str = "walk_side",
     size_px: int = 128,
     env: EnvSettings | None = None,
     cfg: AppConfig | None = None,
@@ -116,13 +186,14 @@ async def generate_frames(
     out_root: Path | None = None,
     review: bool = True,
 ) -> AnimResult:
-    """生成一个动作的多帧素材。
+    """生成一个动作的多帧素材(改进版)。
 
-    帧生成两级策略(④图生图落地):
-    - 第 0 帧文生图定锚(姿势提示词 + 角色卡锁外观);
-    - 后续帧优先图生图编辑锚帧("同角色仅改姿势"),外观由参考图条件化,
-      漂移在生成阶段被压住;编辑通道失败自动回退逐帧文生图并记 notes。
-    生成后仍有逐帧姿势审核 + 相邻帧连贯性审核 + 归一化对齐三道保险。
+    改进:
+    - 更多帧数(16帧walk, 8帧idle)
+    - 渐进式姿势提示词
+    - 重试升级机制(soft→guided→constrained)
+    - 锚帧身份锁定
+    - 严格的帧间连续性检查
     """
     from datetime import datetime
 
@@ -145,15 +216,15 @@ async def generate_frames(
         vision_chat = ChatClient(v_env)
         own_vision = True
     try:
-        action = (action or "walk").strip().lower()
+        action = (action or "walk_side").strip().lower()
         action_def = ANIM_ACTIONS.get(action)
         if not action_def:
             raise ValueError(f"unknown action {action!r}; available: {', '.join(ANIM_ACTIONS)}")
         poses, view = action_def.poses, action_def.view
         card = load_subject(subject_ref, cfg)
         if not card or not card.get("card"):
-            raise ValueError(f"subject card not found: {subject_ref!r} (generate with "
-                             f"save_subject_as first)")
+            raise ValueError(f"subject card not found: {subject_ref!r}")
+
         subject, style = card["card"], card.get("style", "")
 
         out_root = out_root or (PROJECT_ROOT / cfg.output.dir)
@@ -170,16 +241,28 @@ async def generate_frames(
         if reviewer is None:
             result.review_status = "skipped"
 
-        anchor: Path | None = None  # 锚帧 = 第 0 帧产物(白底原图,后续帧编辑它)
-        edit_failed = False  # 编辑通道失败后置位,本任务余下帧全走文生图
+        anchor: Path | None = None  # 锚帧 = 第0帧(身份锚点)
+        edit_failed = False
 
-        async def gen_frame(i: int, pose: str, fix: str = ""):
-            """单帧生成:编辑通道可用且非锚帧 → 编辑锚帧;否则文生图。fix 非空 = 带审核反馈重生成。"""
+        def get_retry_tier(attempt: int) -> dict:
+            """根据尝试次数返回重试配置"""
+            for tier in RETRY_TIERS:
+                lo, hi = tier["attempts"]
+                if lo <= attempt <= hi:
+                    return tier
+            return RETRY_TIERS[-1]  # 默认最严格
+
+        async def gen_frame(i: int, pose: str, fix: str = "", attempt: int = 1):
+            """单帧生成: 带重试升级"""
             nonlocal edit_failed
+            tier = get_retry_tier(attempt)
+
             if edit is not None and not edit_failed and i > 0 and anchor is not None:
                 instruction = EDIT_INSTRUCTION.format(pose=pose)
                 if fix:
                     instruction += f" Fix: {fix}"
+                if tier["guidance"]:
+                    instruction += f" {tier['guidance']}"
                 try:
                     gen = await edit_with_qa(edit, instruction, anchor,
                                              task_dir / f"frame_{i}.png", cfg.image.retries)
@@ -187,9 +270,11 @@ async def generate_frames(
                     return gen
                 except Exception as e:
                     edit_failed = True
-                    result.notes.append(f"frame{i}: edit channel failed "
-                                        f"({str(e)[:80]}), fallback to text-to-image")
+                    result.notes.append(f"frame{i}: edit channel failed ({str(e)[:80]}), fallback to text-to-image")
+
             prompt = frame_prompt(subject, style, f"{pose}. Fix: {fix}" if fix else pose, view)
+            if tier["guidance"]:
+                prompt += f". {tier['guidance']}"
             return await generate_with_qa(image, prompt, task_dir / f"frame_{i}.png",
                                           cfg.image.size, cfg.image.retries)
 
@@ -198,24 +283,31 @@ async def generate_frames(
             result.image_calls += gen.attempts
             if i == 0:
                 anchor = gen.path
+
+            # 逐帧审核 + 重试升级
             if reviewer is not None:
-                for r in range(cfg.review.max_rounds + 1):
+                for attempt in range(1, cfg.review.max_rounds + 2):  # 最多max_rounds+1次
                     verdict = await reviewer.review(gen.path, f"{subject}; pose: {pose}",
                                                     cfg.review.min_score, category="anim_frame")
-                    if verdict.passed or verdict.status == "error" or r == cfg.review.max_rounds:
-                        result.review_status = "ok" if verdict.passed else (
-                            "error" if verdict.status == "error" else "partial")
+                    if verdict.passed or verdict.status == "error":
+                        result.review_status = "ok" if verdict.passed else "error"
                         if not verdict.passed and verdict.issues:
                             result.notes.append(f"frame{i}: {verdict.issues[:80]}")
                         break
-                    # 姿势不符 → 带反馈重生成该帧
-                    gen = await gen_frame(i, pose, fix=verdict.issues)
+                    if attempt > cfg.review.max_rounds:
+                        # 超过重试次数,记录问题但继续
+                        result.notes.append(f"frame{i}: max retries reached, issues: {verdict.issues[:80]}")
+                        result.review_status = "partial"
+                        break
+                    # 带反馈重生成(升级重试)
+                    gen = await gen_frame(i, pose, fix=verdict.issues, attempt=attempt + 1)
                     result.image_calls += gen.attempts
                     if i == 0:
                         anchor = gen.path
+
             result.frames.append(gen.path)
 
-        # 相邻帧连贯性审核:两帧同消息送审,抓"跳变帧"(每对最多重生成后帧 1 次)
+        # 相邻帧连贯性审核(Gate 2: 时间连续性)
         if reviewer is not None and len(result.frames) > 2:
             criterion = f"{subject}; consecutive frames of a '{action}' cycle, view: {view or 'front 3/4'}"
             for i in range(len(result.frames) - 1):
@@ -226,17 +318,22 @@ async def generate_frames(
                     continue
                 if v.passed:
                     continue
+                # 连续性失败,重生成后帧
                 pose_next = poses[i + 1]
-                regen = await gen_frame(i + 1, pose_next,
-                                        fix=f"coherence with previous frame: {v.issues}")
-                result.image_calls += regen.attempts
-                v2 = await reviewer.review_pair(result.frames[i], result.frames[i + 1],
-                                                criterion, cfg.review.min_score)
-                if not v2.passed:
-                    result.notes.append(f"pair{i}-{i+1}: { (v2.issues or v.issues)[:80]}")
-                    result.review_status = "partial"
+                for attempt in range(1, 4):  # 最多3次重试
+                    regen = await gen_frame(i + 1, pose_next,
+                                            fix=f"coherence with previous frame: {v.issues}",
+                                            attempt=attempt)
+                    result.image_calls += regen.attempts
+                    v2 = await reviewer.review_pair(result.frames[i], result.frames[i + 1],
+                                                    criterion, cfg.review.min_score)
+                    if v2.passed:
+                        break
+                    if attempt == 3:
+                        result.notes.append(f"pair{i}-{i+1}: still failing after 3 retries: {(v2.issues or v.issues)[:80]}")
+                        result.review_status = "partial"
 
-        # 后期归一化 + 拼条 + GIF(线程池)
+        # 后期归一化 + 拼条 + GIF
         await asyncio.to_thread(_assemble, result, task_dir, size_px, cfg)
         result.spritesheet = task_dir / "spritesheet.png"
         result.gif = task_dir / "preview.gif"
@@ -254,25 +351,44 @@ async def generate_frames(
 
 
 def _normalize(frame: Image.Image, subject_height: int, canvas: int) -> Image:
-    """裁透明边 → 主体等比缩放到统一高度 → 底边中线对齐(压帧间漂移)。"""
+    """裁白底/透明边 → 主体等比缩放到统一高度 → 底边中线对齐"""
     rgba = frame.convert("RGBA")
-    bbox = rgba.split()[-1].getbbox()
+    alpha = rgba.split()[3]
+    bbox = alpha.getbbox()
+    
+    # 如果alpha通道没有透明区域(白底图)，用亮度检测裁剪白底
+    if bbox is None or (bbox == (0, 0, rgba.width, rgba.height) and alpha.getextrema()[0] == 255):
+        # 白底图：找非白区域
+        rgb = rgba.convert("RGB")
+        arr = np.array(rgb)
+        non_white = (arr[:,:,0] < 245) | (arr[:,:,1] < 245) | (arr[:,:,2] < 245)
+        if np.sum(non_white) > 0:
+            rows, cols = np.where(non_white)
+            bbox = (cols.min(), rows.min(), cols.max() + 1, rows.max() + 1)
+        else:
+            bbox = None
+    
     if bbox:
         rgba = rgba.crop(bbox)
     scale = subject_height / rgba.height
     w, h = max(1, round(rgba.width * scale)), subject_height
     rgba = rgba.resize((w, h), Image.LANCZOS)
-    base = round(canvas * 0.94)  # 统一基线:底部留 6% 边距
+    base = round(canvas * 0.94)
     out = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
     out.paste(rgba, ((canvas - w) // 2, base - h), rgba)
     return out
 
 
-def _assemble(result: AnimResult, task_dir: Path, size_px: int, cfg: AppConfig) -> None:
+def _assemble(result: AnimResult, task_dir: Path, size_px: int, cfg: AppConfig,
+              skip_cutout: bool = True) -> None:
+    """组装动画帧。skip_cutout=True时跳过抠图(避免白色衣物被扣掉)。"""
     frames = [Image.open(p) for p in result.frames]
-    cutouts = [cutout_mod.cutout(f, cfg.cutout)[0] for f in frames]
+    if skip_cutout:
+        # 不抠图，直接转RGBA(白底保留)
+        cutouts = [f.convert("RGBA") for f in frames]
+    else:
+        cutouts = [cutout_mod.cutout(f, cfg.cutout)[0] for f in frames]
     normed = [_normalize(c, round(size_px * 0.84), size_px) for c in cutouts]
-    # 归一化帧单独落盘(直接可用),原图 frame_i.png 留作审计
     norm_dir = task_dir / "norm"
     norm_dir.mkdir(exist_ok=True)
     for i, fr in enumerate(normed):
@@ -283,7 +399,7 @@ def _assemble(result: AnimResult, task_dir: Path, size_px: int, cfg: AppConfig) 
     for i, fr in enumerate(normed):
         sheet.paste(fr, (i * size_px, 0))
     sheet.save(task_dir / "spritesheet.png", "PNG")
-    # 透明 GIF 预览(经典调色板法:index 255 = 透明)
+    # 透明 GIF 预览
     gif_frames = []
     for fr in normed:
         alpha = fr.split()[3]

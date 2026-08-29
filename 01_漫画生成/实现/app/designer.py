@@ -16,18 +16,35 @@ from app.client import ChatClient
 from app.splitter import Panel
 
 DESIGN_SYSTEM = (
-    "You are a manga prompt engineer. Turn the given panel description into ONE "
-    "concise English image-generation prompt (max 80 words). Rules: "
-    "single panel composition; follow the shot type; keep the character appearance "
-    "EXACTLY as described in the character sheet; no text, no speech bubbles, "
-    "no watermarks in the image; output ONLY the prompt itself, nothing else."
+    "You are an expert manga prompt engineer. Create a DETAILED English image-generation prompt "
+    "(100-200 words) with rich visual description. Structure your prompt with these elements:\n\n"
+    "1. SUBJECT: Character actions, expressions, poses, exact appearance from character sheet\n"
+    "2. COMPOSITION: Frame the shot according to the shot type (close-up/medium/wide), "
+    "apply composition rules (rule of thirds, leading lines, depth)\n"
+    "3. ENVIRONMENT: Detailed background, setting atmosphere, spatial relationships\n"
+    "4. LIGHTING: Describe light source, shadows, mood (dramatic/soft/harsh), contrast level\n"
+    "5. DETAILS: Textures, small objects, emotional cues, environmental storytelling\n\n"
+    "Shot type guidance:\n"
+    "- close-up: focus on face/expression, shallow depth, emotional lighting\n"
+    "- medium: upper body, balanced composition, context visible\n"
+    "- wide: full scene, environmental storytelling, establishing shot\n\n"
+    "Rules: Single panel composition; keep character appearance EXACTLY as character sheet; "
+    "no text/speech bubbles/watermarks; maintain consistent manga art style. "
+    "Output ONLY the prompt itself."
 )
 
 CHARACTER_SHEET_SYSTEM = (
-    "You are a character designer. From the panels below, extract every recurring "
-    "character and write a stable English appearance sheet (hair, face, outfit, "
-    "distinctive traits), one line per character in the format "
-    "'Name: appearance description'. Output ONLY the sheet."
+    "You are a character designer. From the panels below, extract every recurring character "
+    "and create a DETAILED appearance sheet for visual consistency. For each character, "
+    "write 5-10 lines covering:\n\n"
+    "- Hair: exact color, style, length, texture (e.g. 'shoulder-length blue hair with side-swept bangs')\n"
+    "- Face: shape, eye color/shape, distinctive features (moles, scars, glasses)\n"
+    "- Body: build, height, posture characteristics\n"
+    "- Outfit: specific clothing items with colors, patterns, accessories\n"
+    "- Distinctive traits: unique visual markers that make this character recognizable\n\n"
+    "Format: 'Name:\n- [detail 1]\n- [detail 2]\n...'\n\n"
+    "Be SPECIFIC with colors, shapes, and sizes. Avoid vague terms like 'nice' or 'typical'. "
+    "Output ONLY the character sheets."
 )
 
 

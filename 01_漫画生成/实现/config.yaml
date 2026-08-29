@@ -1,48 +1,53 @@
-# 漫画生成工作流配置
+# 漫画生成工作流配置 (全部使用Step模型)
 
 # 分镜拆分
 panels:
-  count: 4              # 拆成几格(默认 4;--panels 可覆盖)
-  language: zh          # 台词/旁白语言(生图提示词仍用英文)
+  count: 4
+  language: zh
 
-# 生图
+# 生图 (所有使用Step)
 image:
-  size: "1024x1024"     # 固定格式尺寸(WxH),所有格统一
-  style_anchor: >       # 风格锚:每格提示词共用的开头,保证整卷风格一致
+  size: 1024x1024
+  style_anchor: >
     black and white manga panel, clean ink linework, high contrast,
     dramatic shading, expressive characters
-  extra: ""             # 追加的全局风格要求(如 "japanese shonen style")
+  extra: ''
+  fallback_models:
+    - step-2x-large
+  consistency:
+    enabled: true
+    strength: 0.65
 
-# 角色一致性:给设计 AI 的外貌锁定规则(空则由设计 AI 自行从故事提炼并保持)
+# 角色一致性
 characters:
   lock: true
 
 # 并发与重试
 concurrency:
-  design: 4             # 提示词设计并发数
-  image: 2              # 生图并发数(注意服务商限流)
-  retries: 2            # 单格失败重试次数
+  design: 4
+  image: 2
+  retries: 2
 
 # 拼接
 assemble:
-  caption_height: 64    # 每格底部台词字幕条高度(px)
-  gap: 12               # 格间距(px)
-  background: "#ffffff"
-  format: "JPEG"        # JPEG(体积约为 PNG 1/5)| PNG(无损)
-  quality: 90           # JPEG 质量
+  caption_height: 64
+  gap: 12
+  background: '#ffffff'
+  format: JPEG
+  quality: 90
 
-# 台词优化:拆分产出的台词可能为空/啰嗦,统一改写成漫画式短字幕
+# 台词优化
 polish:
   enabled: true
   max_chars: 24
 
-# 质检(重生成循环)
+# 质检
 critic:
-  prompt_qa: true       # 生成前:提示词 vs 分镜核对,不过 → 带反馈重设计一次
-  image_qa: true        # 生成后:启发式质检(损坏/尺寸错/纯色空白),不过 → 自动重生成
-  vision_model: ""      # 视觉评分模型(端点支持视觉时填写启用;留空跳过)
+  prompt_qa: true
+  image_qa: true
+  vision_model: ''  # 留空禁用视觉质检，使用启发式质检
 
 # 输出
 output:
-  dir: "out"            # 输出目录(相对运行时 cwd;CLI -o 可覆盖)
-  comic_name: "comic.png"
+  dir: out
+  comic_name: comic.png

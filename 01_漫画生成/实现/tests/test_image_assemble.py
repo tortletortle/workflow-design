@@ -1,5 +1,6 @@
-"""生图与拼接:双通道生图、尺寸归一化、占位框、竖排拼接。"""
+"""生图与拼接:双通道生图、尺寸归一化、占位框、竖排拼接、429 兜底与熔断。"""
 import io
+import json
 from pathlib import Path
 
 import httpx
@@ -7,7 +8,8 @@ import pytest
 from PIL import Image
 
 from app.assembler import assemble_comic, render_panel
-from app.client import ImageClient
+from app.client import ImageClient, QuotaExhaustedError
+from app.critic import review_image_vision
 from app.illustrator import generate_all, generate_panel
 from app.splitter import Panel
 from tests.conftest import chat_response, fake_png
@@ -66,12 +68,100 @@ async def test_generate_all_failed_panel_not_fatal(tmp_path):
     class BoomImage:
         model = "x"
 
-        async def generate(self, prompt, size):
+        async def generate(self, prompt, size, model=None):
             raise RuntimeError("upstream down")
 
     ok, failed = await generate_all(BoomImage(), [ok_panel, bad_panel], tmp_path, (32, 32), retries=0)
     assert ok == []
     assert len(failed) == 2
+
+
+def test_image_client_429_raises_quota_without_chat_fallback(env):
+    """429 配额类错误:不降级 chat 通道(同账号额度,降了也白降),直接抛 QuotaExhaustedError。"""
+    import asyncio
+
+    chat_calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/chat/completions"):
+            chat_calls.append(1)
+        return httpx.Response(429, json={"error": {"message": "上游账号额度等待恢复", "code": "upstream_quota_exhausted"}})
+
+    client = ImageClient(env, transport=httpx.MockTransport(handler))
+    with pytest.raises(QuotaExhaustedError):
+        asyncio.run(client.generate("a cat", "64x64"))
+    assert chat_calls == []  # 没有白烧 chat 降级请求
+
+
+async def test_generate_panel_falls_back_model_on_quota(image, env, tmp_path):
+    """主模型 429 → 不重试、立即切兜底模型成功;主模型只被请求一次。"""
+    requests_seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/images/generations"):
+            model = json.loads(request.content.decode("utf-8"))["model"]
+            requests_seen.append(model)
+            if model == "test-image":
+                return httpx.Response(429, json={"error": {"code": "upstream_quota_exhausted"}})
+            return httpx.Response(200, json={"data": [{"url": "http://img.test/panel.png"}]})
+        return httpx.Response(200, content=fake_png())
+
+    client = ImageClient(env, transport=httpx.MockTransport(handler))
+    panel = Panel(index=1, scene="s", image_prompt="p")
+    await generate_panel(client, panel, tmp_path, (32, 32), retries=2, fallback_models=["grok-imagine-image-lite"])
+    assert (tmp_path / "panel_01.png").exists()
+    assert requests_seen == ["test-image", "grok-imagine-image-lite"]  # 429 未重试主模型
+
+
+async def test_generate_all_quota_circuit_breaker(env, tmp_path):
+    """全链 429 → 熔断:后续格直接跳过,不再逐格撞 429。"""
+    images_calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/images/generations"):
+            images_calls.append(json.loads(request.content.decode("utf-8"))["model"])
+            return httpx.Response(429, json={"error": {"code": "upstream_quota_exhausted"}})
+        return httpx.Response(500)
+
+    client = ImageClient(env, transport=httpx.MockTransport(handler))
+    panels = [Panel(index=i, scene="s", image_prompt="p") for i in range(1, 4)]
+    ok, failed = await generate_all(
+        client, panels, tmp_path, (32, 32), concurrency=1, retries=2,
+        fallback_models=["grok-imagine-image-lite"],
+    )
+    assert ok == [] and len(failed) == 3
+    # 只有第 1 格烧了 2 次请求(主模型+兜底各一次),后两格被熔断跳过
+    assert images_calls == ["test-image", "grok-imagine-image-lite"]
+
+
+async def test_review_image_vision_uses_configured_model(tmp_path):
+    """视觉评分必须打到 vision_model 上(修复:此前参数被忽略,一直打到默认 chat 模型)。"""
+    from app.client import ChatClient
+    from app.settings import EnvSettings
+
+    # 确保 vision_base_url 为空，这样才会使用 mock transport
+    env = EnvSettings(
+        base_url="http://api.test/v1", 
+        api_key="sk-test",
+        chat_model="test-chat", 
+        image_model="test-image",
+        vision_base_url="",  # 确保为空
+        vision_api_key=""
+    )
+
+    img_path = tmp_path / "p.png"
+    img_path.write_bytes(fake_png())
+    seen_models: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        seen_models.append(body["model"])
+        return httpx.Response(200, json=chat_response('{"pass": true, "score": 9, "issues": ""}'))
+
+    chat = ChatClient(env, transport=httpx.MockTransport(handler))
+    verdict = await review_image_vision(chat, "step-1o-turbo-vision", img_path, "a panel")
+    assert verdict.passed and verdict.score == 9
+    assert seen_models == ["step-1o-turbo-vision"]
 
 
 def test_render_panel_placeholder_when_file_missing(tmp_path):

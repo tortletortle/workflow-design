@@ -20,18 +20,31 @@ from app.client import ChatClient
 from app.splitter import Panel, _extract_json_array
 
 PROMPT_QA_SYSTEM = (
-    "You are a strict manga prompt reviewer. For EACH panel below, check whether its image "
-    "prompt faithfully covers the panel requirements: scene content, ALL listed characters, "
-    "shot type, and the anchored art style. Respond ONLY with a JSON array, one object per "
-    'panel: [{"index": <int>, "pass": true/false, "score": 1-10, "issues": "brief problems '
-    'or empty"}]. Score >= 8 counts as pass. No other text.'
+    "You are a strict manga prompt reviewer. For EACH panel, evaluate the image prompt quality:\n\n"
+    "Check if the prompt:\n"
+    "1. Includes ALL required characters with specific appearances (not generic descriptions)\n"
+    "2. Describes the scene with rich environmental detail (not just 'a room')\n"
+    "3. Specifies lighting and atmosphere appropriate for the mood\n"
+    "4. Follows the shot type with proper composition guidance\n"
+    "5. Contains 100+ words with concrete visual details (colors, textures, spatial relationships)\n"
+    "6. Maintains consistency with the art style anchor\n\n"
+    "Scoring: 9-10 = excellent detail; 7-8 = adequate but could be richer; <7 = too vague/missing key elements.\n"
+    "Pass threshold: score >= 9 (we demand high quality).\n\n"
+    'Respond ONLY with JSON array: [{"index": <int>, "pass": true/false, "score": 1-10, '
+    '"issues": "specific problems or empty"}]. No other text.'
 )
 
 VISION_QA_SYSTEM = (
-    "You are a strict manga art reviewer. Look at the generated panel image and judge: "
-    "(a) does it match the prompt; (b) character consistency; (c) visible defects "
-    "(broken anatomy, garbled content, wrong composition). Respond ONLY with JSON: "
-    '{"pass": true/false, "score": 1-10, "issues": "brief problems or empty"}.'
+    "You are a strict manga art reviewer. Evaluate the generated image on multiple dimensions:\n\n"
+    "1. PROMPT MATCH: Does the image accurately reflect the prompt's scene, characters, and details?\n"
+    "2. CHARACTER CONSISTENCY: Do characters match their established appearance? Same face, hair, outfit?\n"
+    "3. TECHNICAL QUALITY: Check for broken anatomy, garbled content, artifacts, distortions\n"
+    "4. COMPOSITION: Is the framing effective? Good use of space, clear focal point?\n"
+    "5. ARTISTIC MERIT: Does it have visual appeal? Appropriate mood, lighting, atmosphere?\n\n"
+    "Scoring: 9-10 = excellent on all dimensions; 7-8 = good but minor issues; 5-6 = noticeable problems; "
+    "<5 = major defects or completely wrong.\n"
+    "Pass threshold: score >= 8 (high quality bar).\n\n"
+    'Respond ONLY with JSON: {"pass": true/false, "score": 1-10, "issues": "specific problems or empty"}.'
 )
 
 
@@ -107,31 +120,53 @@ async def review_prompts(chat: ChatClient, panels: list[Panel]) -> dict[int, Cri
                 issues=str(item.get("issues", "")),
             )
         for p in panels:  # 响应漏掉的格 → 放行
-            verdicts.setdefault(p.index, CriticVerdict(True, 8, auto_pass + " missing from response"))
+            verdicts.setdefault(p.index, CriticVerdict(True, 9, auto_pass + " missing from response"))
         return verdicts
     except (ValueError, json.JSONDecodeError, KeyError, TypeError) as e:
-        return {p.index: CriticVerdict(True, 8, f"{auto_pass} parse failed: {e}") for p in panels}
+        return {p.index: CriticVerdict(True, 9, f"{auto_pass} parse failed: {e}") for p in panels}
 
 
 async def review_image_vision(
     chat: ChatClient, vision_model: str, image_path: Path, prompt: str
 ) -> CriticVerdict:
-    """视觉评分(需端点支持视觉模型;通过 config critic.vision_model 启用)。"""
+    """视觉评分(需端点支持视觉模型;通过 config critic.vision_model 启用)。
+
+    chat 传入的是主 ChatClient;若 env 配了 vision_base_url/vision_api_key,
+    则临时构建独立客户端直连视觉端点(绕过 newapi 包装层)。
+    """
+    from app.client import ChatClient as _CC  # 局部导入避免循环
+
     b64 = base64.b64encode(image_path.read_bytes()).decode()
-    raw = await chat.chat(
-        [
-            {"role": "system", "content": VISION_QA_SYSTEM},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": f"Prompt was:\n{prompt}"},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                ],
-            },
-        ],
-        temperature=0.0,
-    )
-    return parse_verdict(raw)
+    messages = [
+        {"role": "system", "content": VISION_QA_SYSTEM},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"Prompt was:\n{prompt}"},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+            ],
+        },
+    ]
+    client_to_use = chat
+    temp_client = None
+    if chat._vision_base_url:
+        temp_client = _CC.__new__(_CC)
+        import httpx as _httpx
+
+        temp_client._client = _httpx.AsyncClient(
+            base_url=chat._vision_base_url.rstrip("/"),
+            headers={"Authorization": f"Bearer {chat._vision_api_key}"},
+            timeout=_httpx.Timeout(120.0, connect=10.0),
+        )
+        temp_client.model = vision_model
+        client_to_use = temp_client
+
+    try:
+        raw = await client_to_use.chat(messages, temperature=0.0, model=vision_model or None)
+        return parse_verdict(raw)
+    finally:
+        if temp_client:
+            await temp_client.aclose()
 
 
 def review_image_heuristic(image_path: Path, expected_size: tuple[int, int]) -> CriticVerdict:

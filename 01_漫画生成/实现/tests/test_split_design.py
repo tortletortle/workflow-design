@@ -21,17 +21,20 @@ def test_parse_panels_extracts_embedded_array():
 
 
 def test_parse_panels_count_mismatch_raises():
-    with pytest.raises(ValueError):
+    from app.errors import ModelOutputError
+    with pytest.raises(ModelOutputError):
         parse_panels("[{\"index\": 1, \"scene\": \"s\"}]", expected=3)
 
 
 def test_parse_panels_no_array_raises():
-    with pytest.raises(ValueError):
+    from app.errors import ModelOutputError
+    with pytest.raises(ModelOutputError):
         parse_panels("抱歉我不能这样做")
 
 
 def test_parse_panels_unbalanced_raises():
-    with pytest.raises(ValueError):
+    from app.errors import ModelOutputError
+    with pytest.raises(ModelOutputError):
         parse_panels("[{\"index\": 1, \"scene\": \"s\"")
 
 

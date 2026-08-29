@@ -75,7 +75,7 @@ flowchart TD
 | 请求分解 | 代理 grok-chat-fast | 0.3（失败降温 0.0 重试） | 400 | 强制 JSON 输出；注入风格锚/主体卡 |
 | 生图 | 代理 grok-imagine-image-quality-lite | — | — | images/generations 主通道，chat 降级通道 |
 | 图生图编辑 | `ASSET_EDIT_MODEL`（StepFun 官方 step-image-edit-2，/images/edits multipart） | — | — | 动画锚帧条件生成（第 0 帧文生图定锚，后续帧"同角色仅改姿势"）+ generate_asset 带反馈重生成的保形改图；key 留空不启用，失败自动回退文生图 |
-| 视觉审核 | claude-haiku-4-5 @ newapi.dragon3api.com（独立服务商，非推理型秒级） | 0.0 | 1500 | 备用 step-3.7-flash @ yujianwudi.top（推理型，单轮 30–45s，配置注释保留在 .env）；`uv run python check_vision.py` 一键验证 |
+| 视觉审核 | step-1o-turbo-vision @ api.stepfun.com（阶跃星辰，8000M额度） | 0.0 | 1500 | 备用 step-3.7-flash（推理型，单轮 30–45s，配置注释保留在 .env）；`uv run python check_vision.py` 一键验证 |
 
 ## 7 · 工具与集成
 
